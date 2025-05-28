@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        SERVICE = 'db'
+        SERVICE = 'bottleneck'
         NAME = "guikaidei/${env.SERVICE}"
     }
     stages {
