@@ -16,64 +16,66 @@ pipeline {
                     KUBECONFIG_TEMP_PATH="/tmp/kubeconfig-eks-store.yaml"
                     PROMETHEUS_YAML_PATH="prometheus/k8s/k8s.yaml" # Caminho para o seu arquivo YAML do Prometheus
                     
-                    # O nome padrão do usuário/contexto gerado por aws eks update-kubeconfig
-                    # Ele é o ARN completo do cluster
-                    DEFAULT_KUBECONFIG_NAME="arn:aws:eks:${AWS_REGION}:730335608828:cluster/${EKS_CLUSTER_NAME}"
                     TARGET_USERNAME="guilherme.kaidei" # O username mapeado no seu aws-auth ConfigMap
                     
-                    echo "--- Gerando kubeconfig inicial ---"
-                    # 1. Gerar o kubeconfig para um arquivo temporário.
-                    #    Ele virá com o ARN do cluster como username/context name por padrão.
-                    aws eks update-kubeconfig \
-                        --name "${EKS_CLUSTER_NAME}" \
-                        --region "${AWS_REGION}" \
-                        --kubeconfig "${KUBECONFIG_TEMP_PATH}"
+                    echo "--- Construindo kubeconfig manualmente ---"
                     
-                    echo "--- Modificando kubeconfig com comandos kubectl config ---"
-                    # 2. Definir a variável de ambiente KUBECONFIG para que todos os comandos kubectl usem este arquivo.
-                    export KUBECONFIG="${KUBECONFIG_TEMP_PATH}"
+                    # 1. Obter detalhes do cluster EKS (endpoint e CA data)
+                    #    Requer 'jq' para parsear a saída JSON
+                    CLUSTER_INFO=$(aws eks describe-cluster --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --query 'cluster.{endpoint:endpoint,caData:certificateAuthority.data}' --output json)
+                    CLUSTER_ENDPOINT=$(echo "${CLUSTER_INFO}" | jq -r '.endpoint')
+                    CLUSTER_CA_DATA=$(echo "${CLUSTER_INFO}" | jq -r '.caData')
                     
-                    # Renomear o usuário existente para o TARGET_USERNAME
-                    # Primeiro, pegamos a configuração 'exec' do usuário padrão
-                    USER_EXEC_CONFIG=$(kubectl config view -o jsonpath="{.users[?(@.name=='${DEFAULT_KUBECONFIG_NAME}')].user.exec}")
+                    # 2. Obter o token de autenticação para o usuário atual
+                    #    Isso usará a identidade IAM que o Jenkins está usando (guilherme.kaidei via SSO)
+                    #    Requer 'jq' para parsear a saída JSON
+                    AUTH_TOKEN=$(aws eks get-token --cluster-name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --output json | jq -r '.status.token')
                     
-                    # Deletamos o usuário com o nome padrão
-                    kubectl config unset users."${DEFAULT_KUBECONFIG_NAME}"
+                    # 3. Criar o arquivo kubeconfig manualmente usando um 'here-document'
+                    #    Isso garante que o YAML seja formatado corretamente e contenha as informações essenciais.
+                    cat <<EOF > "${KUBECONFIG_TEMP_PATH}"
+                    apiVersion: v1
+                    clusters:
+                    - cluster:
+                        certificate-authority-data: ${CLUSTER_CA_DATA}
+                        server: ${CLUSTER_ENDPOINT}
+                      name: ${EKS_CLUSTER_NAME} # Nome do cluster no kubeconfig
+                    contexts:
+                    - context:
+                        cluster: ${EKS_CLUSTER_NAME}
+                        user: ${TARGET_USERNAME}
+                      name: ${TARGET_USERNAME}@${EKS_CLUSTER_NAME} # Nome do contexto
+                    current-context: ${TARGET_USERNAME}@${EKS_CLUSTER_NAME}
+                    kind: Config
+                    preferences: {}
+                    users:
+                    - name: ${TARGET_USERNAME}
+                      user:
+                        token: ${AUTH_TOKEN}
+                    EOF
                     
-                    # Criamos um novo usuário com o TARGET_USERNAME e a mesma configuração 'exec'
-                    # Isso garante que o token seja gerado corretamente para a identidade SSO
-                    kubectl config set-credentials "${TARGET_USERNAME}" --exec-api-version="${USER_EXEC_CONFIG.apiVersion}" --exec-command="${USER_EXEC_CONFIG.command}" --exec-arg="--region" --exec-arg="${AWS_REGION}" --exec-arg="eks" --exec-arg="get-token" --exec-arg="--cluster-name" --exec-arg="${EKS_CLUSTER_NAME}" --exec-arg="--output" --exec-arg="json"
-                    
-                    # Atualizar o contexto atual para usar o novo nome de usuário
-                    # O nome do contexto permanece o ARN completo do cluster, mas agora aponta para o usuário renomeado.
-                    kubectl config set-context "${DEFAULT_KUBECONFIG_NAME}" --user="${TARGET_USERNAME}"
-                    
-                    # Opcional: Renomear o próprio contexto para o TARGET_USERNAME para consistência
-                    # Isso muda o 'name' na seção 'contexts:'
-                    kubectl config rename-context "${DEFAULT_KUBECONFIG_NAME}" "${TARGET_USERNAME}"
-                    
-                    # Definir o contexto atual para o novo nome (guilherme.kaidei)
-                    kubectl config use-context "${TARGET_USERNAME}"
-                    
-                    
-                    echo "--- Conteúdo do kubeconfig modificado (para depuração) ---"
-                    # 3. Exibir o conteúdo do kubeconfig modificado para confirmar as alterações.
+                    echo "--- Conteúdo do kubeconfig construído (para depuração) ---"
+                    # 4. Exibir o conteúdo do kubeconfig construído para confirmar as alterações.
                     cat "${KUBECONFIG_TEMP_PATH}"
                     
-                    echo "--- Verificando permissões com o kubeconfig modificado ---"
-                    # 4. Verifique as permissões. Agora, todos devem retornar 'yes'.
+                    # 5. Definir a variável de ambiente KUBECONFIG para que todos os comandos kubectl usem este arquivo.
+                    export KUBECONFIG="${KUBECONFIG_TEMP_PATH}"
+                    
+                    echo "--- Verificando permissões com o kubeconfig construído ---"
+                    # 6. Verifique as permissões. Agora, todos devem retornar 'yes'.
+                    #    Se 'jq' não estiver instalado, os comandos acima falharão antes de chegar aqui.
                     kubectl auth can-i create clusterroles
                     kubectl auth can-i create clusterrolebindings
                     kubectl auth can-i get clusterroles
                     kubectl auth can-i get configmaps -n kube-system # Este pode ainda ser 'no', mas não é o bloqueador
                     
                     echo "--- Aplicando o YAML do Prometheus ao cluster EKS ---"
-                    # 5. Aplicar o YAML do Prometheus.
+                    # 7. Aplicar o YAML do Prometheus.
                     #    Como o kubeconfig está configurado corretamente, isso deve funcionar.
                     kubectl apply -f "${PROMETHEUS_YAML_PATH}"
                     
                     echo "--- Verificação final dos pods do Prometheus ---"
-                    # 6. Verificar o status dos pods do Prometheus.
+                    # 8. Verificar o status dos pods do Prometheus.
                     kubectl get pods -l app=prometheus
                     
                     # Opcional: Desdefinir a variável KUBECONFIG para não afetar passos subsequentes do pipeline
