@@ -35,13 +35,13 @@ data:
             regex: (.+):\d+;(\d+)
             replacement: $1:$2
             target_label: __address__
-
-  - job_name: 'kubernetes-services'
-    kubernetes_sd_configs:
-      - role: service
-    relabel_configs:
-      - action: labelmap
-        regex: __meta_kubernetes_service_label_(.+)
+            
+      - job_name: 'kubernetes-services'
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
 
 
 ---
