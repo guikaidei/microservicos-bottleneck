@@ -18,6 +18,23 @@ pipeline {
                     
                     TARGET_USERNAME="guilherme.kaidei" # O username mapeado no seu aws-auth ConfigMap
                     
+                    echo "--- Instalando dependências (jq) ---"
+                    # Instalar jq se não estiver presente.
+                    # Use 'apt-get' para sistemas baseados em Debian/Ubuntu, ou 'yum' para sistemas baseados em RHEL/CentOS.
+                    # Certifique-se de que o usuário do Jenkins tem permissões para instalar pacotes (sudo).
+                    # Se o agente Jenkins for um container, você pode precisar adicionar 'jq' à imagem do container.
+                    if ! command -v jq &> /dev/null
+                    then
+                        echo "jq não encontrado. Tentando instalar..."
+                        # Para Debian/Ubuntu:
+                        sudo apt-get update && sudo apt-get install -y jq
+                        # Para RHEL/CentOS:
+                        # sudo yum install -y jq
+                    else
+                        echo "jq já está instalado."
+                    fi
+                    
+                    
                     echo "--- Construindo kubeconfig manualmente ---"
                     
                     # 1. Obter detalhes do cluster EKS (endpoint e CA data)
@@ -83,6 +100,7 @@ pipeline {
                     
                     # Opcional: Limpar o arquivo kubeconfig temporário após o uso
                     # rm "${KUBECONFIG_TEMP_PATH}"
+
                 '''
             }
         }
