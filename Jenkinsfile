@@ -11,67 +11,66 @@ pipeline {
                     #!/bin/bash
 
                     # Define variáveis para o nome do cluster e região
+                    # Substitua 'eks-store' e 'sa-east-1' pelos valores corretos do seu ambiente
                     EKS_CLUSTER_NAME="eks-store"
                     AWS_REGION="sa-east-1"
                     KUBECONFIG_TEMP_PATH="/tmp/kubeconfig-eks-store.yaml"
                     PROMETHEUS_YAML_PATH="prometheus/k8s/k8s.yaml" # Caminho para o seu arquivo YAML do Prometheus
                     
-                    # O ARN completo do cluster, conforme aparece no kubeconfig gerado
-                    EKS_CLUSTER_ARN="arn:aws:eks:${AWS_REGION}:730335608828:cluster/${EKS_CLUSTER_NAME}"
-                    TARGET_USERNAME="guilherme.kaidei"
+                    # O nome padrão do usuário/contexto gerado por aws eks update-kubeconfig
+                    # Ele é o ARN completo do cluster
+                    DEFAULT_KUBECONFIG_NAME="arn:aws:eks:${AWS_REGION}:730335608828:cluster/${EKS_CLUSTER_NAME}"
+                    TARGET_USERNAME="guilherme.kaidei" # O username mapeado no seu aws-auth ConfigMap
                     
                     echo "--- Gerando kubeconfig inicial ---"
-                    # 1. Gerar o kubeconfig inicial para um arquivo temporário.
-                    #    Ele virá com o ARN do cluster como username por padrão.
+                    # 1. Gerar o kubeconfig para um arquivo temporário.
+                    #    Ele virá com o ARN do cluster como username/context name por padrão.
                     aws eks update-kubeconfig \
                         --name "${EKS_CLUSTER_NAME}" \
                         --region "${AWS_REGION}" \
                         --kubeconfig "${KUBECONFIG_TEMP_PATH}"
                     
-                    echo "--- Modificando username no kubeconfig temporário com sed preciso ---"
-                    # 2. Modificar o username no arquivo kubeconfig gerado usando 'sed'.
-                    #    Estes comandos são mais precisos para evitar duplicatas e alterações indesejadas.
+                    echo "--- Modificando kubeconfig com comandos kubectl config ---"
+                    # 2. Definir a variável de ambiente KUBECONFIG para que todos os comandos kubectl usem este arquivo.
+                    export KUBECONFIG="${KUBECONFIG_TEMP_PATH}"
                     
-                    # Modifica o 'name' na seção 'users'.
-                    # Procura pela linha que começa com '- name:' e contém o EKS_CLUSTER_ARN,
-                    # e que está dentro do bloco 'users:'.
-                    # Usa um padrão mais específico para evitar conflitos com 'name:' em outras seções.
-                    sed -i "/^users:/,/^- name:/ { s|^- name: ${EKS_CLUSTER_ARN}$|- name: ${TARGET_USERNAME}|; t; }" "${KUBECONFIG_TEMP_PATH}"
+                    # Renomear a entrada do usuário no kubeconfig
+                    # Isso muda o 'name' na seção 'users:' de 'arn:aws:eks:...' para 'guilherme.kaidei'
+                    kubectl config rename-user "${DEFAULT_KUBECONFIG_NAME}" "${TARGET_USERNAME}"
                     
-                    # Modifica o 'user' na seção 'contexts'.
-                    # Procura pela linha que começa com '    user:' (com 4 espaços) e contém o EKS_CLUSTER_ARN,
-                    # e que está dentro do bloco 'contexts:'.
-                    sed -i "/^contexts:/,/^current-context:/ { s|^    user: ${EKS_CLUSTER_ARN}$|    user: ${TARGET_USERNAME}|; t; }" "${KUBECONFIG_TEMP_PATH}"
+                    # Atualizar o contexto para usar o novo nome de usuário
+                    # O nome do contexto ainda é o ARN completo, mas agora ele aponta para o usuário renomeado.
+                    kubectl config set-context "${DEFAULT_KUBECONFIG_NAME}" --user="${TARGET_USERNAME}"
                     
-                    # Modifica o 'name' do contexto atual (que também é o ARN do cluster por padrão)
-                    # Isso é necessário porque o 'current-context' ainda aponta para o ARN completo
-                    sed -i "s|^current-context: ${EKS_CLUSTER_ARN}$|current-context: ${TARGET_USERNAME}|" "${KUBECONFIG_TEMP_PATH}"
+                    # Opcional: Renomear o contexto para 'guilherme.kaidei' para consistência
+                    # Isso muda o 'name' na seção 'contexts:'
+                    kubectl config rename-context "${DEFAULT_KUBECONFIG_NAME}" "${TARGET_USERNAME}"
                     
-                    # Modifica o 'name' do contexto dentro da lista de contextos
-                    # Isso é para o caso de haver mais de um contexto, ou para garantir que o nome do contexto
-                    # seja o mesmo do username que estamos usando.
-                    sed -i "/^contexts:/,/^current-context:/ { s|^- name: ${EKS_CLUSTER_ARN}$|- name: ${TARGET_USERNAME}|; t; }" "${KUBECONFIG_TEMP_PATH}"
-                    
+                    # Definir o contexto atual para o novo nome (guilherme.kaidei)
+                    kubectl config use-context "${TARGET_USERNAME}"
                     
                     echo "--- Conteúdo do kubeconfig modificado (para depuração) ---"
+                    # 3. Exibir o conteúdo do kubeconfig modificado para confirmar as alterações.
                     cat "${KUBECONFIG_TEMP_PATH}"
                     
                     echo "--- Verificando permissões com o kubeconfig modificado ---"
-                    # 3. Verifique as permissões com o kubeconfig modificado.
-                    #    Estes comandos devem retornar 'yes' agora.
-                    kubectl --kubeconfig "${KUBECONFIG_TEMP_PATH}" auth can-i create clusterroles
-                    kubectl --kubeconfig "${KUBECONFIG_TEMP_PATH}" auth can-i create clusterrolebindings
-                    kubectl --kubeconfig "${KUBECONFIG_TEMP_PATH}" auth can-i get clusterroles
-                    kubectl --kubeconfig "${KUBECONFIG_TEMP_PATH}" auth can-i get configmaps -n kube-system # Este pode ainda ser 'no', mas não é o bloqueador
+                    # 4. Verifique as permissões. Agora, todos devem retornar 'yes'.
+                    kubectl auth can-i create clusterroles
+                    kubectl auth can-i create clusterrolebindings
+                    kubectl auth can-i get clusterroles
+                    kubectl auth can-i get configmaps -n kube-system # Este pode ainda ser 'no', mas não é o bloqueador
                     
                     echo "--- Aplicando o YAML do Prometheus ao cluster EKS ---"
-                    # 4. Aplique o YAML do Prometheus usando o kubeconfig modificado.
-                    #    Isso deve criar/atualizar todos os recursos do Prometheus (ConfigMap, ClusterRole, ClusterRoleBinding, Deployment, Service).
-                    kubectl --kubeconfig "${KUBECONFIG_TEMP_PATH}" apply -f "${PROMETHEUS_YAML_PATH}"
+                    # 5. Aplicar o YAML do Prometheus.
+                    #    Como o kubeconfig está configurado corretamente, isso deve funcionar.
+                    kubectl apply -f "${PROMETHEUS_YAML_PATH}"
                     
                     echo "--- Verificação final dos pods do Prometheus ---"
-                    # 5. Verifique se o pod do Prometheus está rodando
-                    kubectl --kubeconfig "${KUBECONFIG_TEMP_PATH}" get pods -l app=prometheus
+                    # 6. Verificar o status dos pods do Prometheus.
+                    kubectl get pods -l app=prometheus
+                    
+                    # Opcional: Desdefinir a variável KUBECONFIG para não afetar passos subsequentes do pipeline
+                    unset KUBECONFIG
                     
                     # Opcional: Limpar o arquivo kubeconfig temporário após o uso
                     # rm "${KUBECONFIG_TEMP_PATH}"
