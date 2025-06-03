@@ -11,7 +11,6 @@ pipeline {
                     #!/bin/bash
 
                     # Define variáveis para o nome do cluster e região
-                    # Substitua 'eks-store' e 'sa-east-1' pelos valores corretos do seu ambiente
                     EKS_CLUSTER_NAME="eks-store"
                     AWS_REGION="sa-east-1"
                     KUBECONFIG_TEMP_PATH="/tmp/kubeconfig-eks-store.yaml"
@@ -34,20 +33,28 @@ pipeline {
                     # 2. Definir a variável de ambiente KUBECONFIG para que todos os comandos kubectl usem este arquivo.
                     export KUBECONFIG="${KUBECONFIG_TEMP_PATH}"
                     
-                    # Renomear a entrada do usuário no kubeconfig
-                    # Isso muda o 'name' na seção 'users:' de 'arn:aws:eks:...' para 'guilherme.kaidei'
-                    kubectl config rename-user "${DEFAULT_KUBECONFIG_NAME}" "${TARGET_USERNAME}"
+                    # Renomear o usuário existente para o TARGET_USERNAME
+                    # Primeiro, pegamos a configuração 'exec' do usuário padrão
+                    USER_EXEC_CONFIG=$(kubectl config view -o jsonpath="{.users[?(@.name=='${DEFAULT_KUBECONFIG_NAME}')].user.exec}")
                     
-                    # Atualizar o contexto para usar o novo nome de usuário
-                    # O nome do contexto ainda é o ARN completo, mas agora ele aponta para o usuário renomeado.
+                    # Deletamos o usuário com o nome padrão
+                    kubectl config unset users."${DEFAULT_KUBECONFIG_NAME}"
+                    
+                    # Criamos um novo usuário com o TARGET_USERNAME e a mesma configuração 'exec'
+                    # Isso garante que o token seja gerado corretamente para a identidade SSO
+                    kubectl config set-credentials "${TARGET_USERNAME}" --exec-api-version="${USER_EXEC_CONFIG.apiVersion}" --exec-command="${USER_EXEC_CONFIG.command}" --exec-arg="--region" --exec-arg="${AWS_REGION}" --exec-arg="eks" --exec-arg="get-token" --exec-arg="--cluster-name" --exec-arg="${EKS_CLUSTER_NAME}" --exec-arg="--output" --exec-arg="json"
+                    
+                    # Atualizar o contexto atual para usar o novo nome de usuário
+                    # O nome do contexto permanece o ARN completo do cluster, mas agora aponta para o usuário renomeado.
                     kubectl config set-context "${DEFAULT_KUBECONFIG_NAME}" --user="${TARGET_USERNAME}"
                     
-                    # Opcional: Renomear o contexto para 'guilherme.kaidei' para consistência
+                    # Opcional: Renomear o próprio contexto para o TARGET_USERNAME para consistência
                     # Isso muda o 'name' na seção 'contexts:'
                     kubectl config rename-context "${DEFAULT_KUBECONFIG_NAME}" "${TARGET_USERNAME}"
                     
                     # Definir o contexto atual para o novo nome (guilherme.kaidei)
                     kubectl config use-context "${TARGET_USERNAME}"
+                    
                     
                     echo "--- Conteúdo do kubeconfig modificado (para depuração) ---"
                     # 3. Exibir o conteúdo do kubeconfig modificado para confirmar as alterações.
