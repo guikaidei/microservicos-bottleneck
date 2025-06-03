@@ -30,15 +30,28 @@ pipeline {
                     
                     echo "--- Modificando username no kubeconfig temporário com sed preciso ---"
                     # 2. Modificar o username no arquivo kubeconfig gerado usando 'sed'.
-                    #    Estes comandos são mais precisos para evitar duplicatas.
+                    #    Estes comandos são mais precisos para evitar duplicatas e alterações indesejadas.
                     
-                    # Modifica a entrada 'name' na seção 'users'
-                    # Garante que a substituição ocorra apenas na linha que começa com '- name: ' e termina com o ARN completo
-                    sed -i "s|^- name: ${EKS_CLUSTER_ARN}$|- name: ${TARGET_USERNAME}|" "${KUBECONFIG_TEMP_PATH}"
+                    # Modifica o 'name' na seção 'users'.
+                    # Procura pela linha que começa com '- name:' e contém o EKS_CLUSTER_ARN,
+                    # e que está dentro do bloco 'users:'.
+                    # Usa um padrão mais específico para evitar conflitos com 'name:' em outras seções.
+                    sed -i "/^users:/,/^- name:/ { s|^- name: ${EKS_CLUSTER_ARN}$|- name: ${TARGET_USERNAME}|; t; }" "${KUBECONFIG_TEMP_PATH}"
                     
-                    # Modifica a entrada 'user' dentro do 'context'
-                    # Garante que a substituição ocorra apenas na linha que começa com '  user: ' e termina com o ARN completo
-                    sed -i "s|^  user: ${EKS_CLUSTER_ARN}$|  user: ${TARGET_USERNAME}|" "${KUBECONFIG_TEMP_PATH}"
+                    # Modifica o 'user' na seção 'contexts'.
+                    # Procura pela linha que começa com '    user:' (com 4 espaços) e contém o EKS_CLUSTER_ARN,
+                    # e que está dentro do bloco 'contexts:'.
+                    sed -i "/^contexts:/,/^current-context:/ { s|^    user: ${EKS_CLUSTER_ARN}$|    user: ${TARGET_USERNAME}|; t; }" "${KUBECONFIG_TEMP_PATH}"
+                    
+                    # Modifica o 'name' do contexto atual (que também é o ARN do cluster por padrão)
+                    # Isso é necessário porque o 'current-context' ainda aponta para o ARN completo
+                    sed -i "s|^current-context: ${EKS_CLUSTER_ARN}$|current-context: ${TARGET_USERNAME}|" "${KUBECONFIG_TEMP_PATH}"
+                    
+                    # Modifica o 'name' do contexto dentro da lista de contextos
+                    # Isso é para o caso de haver mais de um contexto, ou para garantir que o nome do contexto
+                    # seja o mesmo do username que estamos usando.
+                    sed -i "/^contexts:/,/^current-context:/ { s|^- name: ${EKS_CLUSTER_ARN}$|- name: ${TARGET_USERNAME}|; t; }" "${KUBECONFIG_TEMP_PATH}"
+                    
                     
                     echo "--- Conteúdo do kubeconfig modificado (para depuração) ---"
                     cat "${KUBECONFIG_TEMP_PATH}"
