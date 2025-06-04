@@ -9,7 +9,7 @@ pipeline {
             steps {
                 sh '''
                     #!/bin/bash
-
+                    
                     # Define variáveis para o nome do cluster e região
                     EKS_CLUSTER_NAME="eks-store"
                     AWS_REGION="sa-east-1"
@@ -20,19 +20,30 @@ pipeline {
                     
                     echo "--- Instalando dependências (jq) ---"
                     # Instalar jq se não estiver presente.
-                    # Use 'apt-get' para sistemas baseados em Debian/Ubuntu, ou 'yum' para sistemas baseados em RHEL/CentOS.
-                    # Certifique-se de que o usuário do Jenkins tem permissões para instalar pacotes (sudo).
-                    # Se o agente Jenkins for um container, você pode precisar adicionar 'jq' à imagem do container.
+                    # Tenta detectar o gerenciador de pacotes.
+                    # Se o agente Jenkins for um container, a melhor prática é pré-instalar 'jq' na imagem do container.
                     if ! command -v jq &> /dev/null
                     then
                         echo "jq não encontrado. Tentando instalar..."
-                        # Para Debian/Ubuntu:
-                        sudo apt-get update && sudo apt-get install -y jq
-                        # Para RHEL/CentOS:
-                        # sudo yum install -y jq
-                    else
-                        echo "jq já está instalado."
+                        if command -v apt-get &> /dev/null
+                        then
+                            sudo apt-get update && sudo apt-get install -y jq
+                        elif command -v yum &> /dev/null
+                        then
+                            sudo yum install -y jq
+                        else
+                            echo "Nenhum gerenciador de pacotes conhecido (apt-get ou yum) encontrado. Por favor, instale 'jq' manualmente ou inclua-o na imagem do seu agente Jenkins."
+                            exit 1 # Sai do script se jq não puder ser instalado
+                        fi
                     fi
+                    
+                    # Verificar se jq está disponível após a tentativa de instalação
+                    if ! command -v jq &> /dev/null
+                    then
+                        echo "Erro: 'jq' ainda não está disponível após a tentativa de instalação. Por favor, certifique-se de que 'jq' esteja instalado e no PATH do seu agente Jenkins, ou pré-instale-o na imagem do container do agente."
+                        exit 1 # Sai do script se jq não estiver disponível
+                    fi
+                    echo "jq está instalado e disponível."
                     
                     
                     echo "--- Construindo kubeconfig manualmente ---"
