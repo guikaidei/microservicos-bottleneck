@@ -2,24 +2,23 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
-  namespace: default # Defina a namespace se não for 'default'
 data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
-
+    
     scrape_configs:
       - job_name: 'prometheus'
         static_configs:
           - targets: ['localhost:9090']
-
+    
       - job_name: 'kubernetes-nodes'
         kubernetes_sd_configs:
           - role: node
         relabel_configs:
           - action: labelmap
             regex: __meta_kubernetes_node_label_(.+)
-
+    
       - job_name: 'kubernetes-pods'
         kubernetes_sd_configs:
           - role: pod
@@ -34,8 +33,9 @@ data:
           - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
             action: replace
             regex: (.+):\d+;(\d+)
+            replacement: $1:$2
             target_label: __address__
-
+            
       - job_name: 'kubernetes-services'
         kubernetes_sd_configs:
           - role: service
@@ -43,65 +43,13 @@ data:
           - action: labelmap
             regex: __meta_kubernetes_service_label_(.+)
 
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: prometheus-role # Nome do ClusterRole
-rules:
-- apiGroups: [""] # "" indica o core API group
-  resources:
-  - nodes
-  - nodes/proxy
-  - services
-  - endpoints
-  - pods
-  verbs: ["get", "list", "watch"] # Permissões para listar e observar recursos
-
-- apiGroups: ["extensions", "apps"] # Para Deployments, DaemonSets, etc.
-  resources:
-  - ingresses
-  verbs: ["get", "list", "watch"]
-
-- apiGroups: ["networking.k8s.io"] # Para Ingresses no Kubernetes 1.19+
-  resources:
-  - ingresses
-  verbs: ["get", "list", "watch"]
-
-- apiGroups: ["discovery.k8s.io"] # Para EndpointSlices no Kubernetes 1.16+
-  resources:
-  - endpointslices
-  verbs: ["get", "list", "watch"]
-
-# Permissões para APIs de métricas (se você estiver usando kube-state-metrics ou metrics-server)
-- apiGroups: ["metrics.k8s.io"]
-  resources:
-  - pods
-  - nodes
-  verbs: ["get", "list", "watch"]
 
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: prometheus-role-binding # Nome do ClusterRoleBinding
-subjects:
-- kind: ServiceAccount
-  name: default # O Service Account que seu pod do Prometheus está usando (padrão)
-  namespace: default # A namespace onde seu pod do Prometheus está rodando
-roleRef:
-  kind: ClusterRole
-  name: prometheus-role # O nome do ClusterRole que acabamos de definir
-  apiGroup: rbac.authorization.k8s.io
 
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: prometheus
-  namespace: default # Defina a namespace se não for 'default'
-  labels:
-    app: prometheus
 spec:
   replicas: 1
   selector:
@@ -112,7 +60,6 @@ spec:
       labels:
         app: prometheus
     spec:
-      serviceAccountName: default # Vincula o Deployment ao Service Account 'default'
       containers:
         - name: prometheus
           image: prom/prometheus:latest
@@ -122,30 +69,18 @@ spec:
             - name: config
               mountPath: /etc/prometheus/
               readOnly: true
-          resources: # É uma boa prática definir requests/limits
-            requests:
-              memory: "256Mi"
-              cpu: "200m"
-            limits:
-              memory: "512Mi"
-              cpu: "500m"
       volumes:
         - name: config
           configMap:
             name: prometheus-config
-
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: prometheus
-  namespace: default # Defina a namespace se não for 'default'
-  labels:
-    app: prometheus
 spec:
   selector:
     app: prometheus
   ports:
     - port: 9090
       targetPort: 9090
-  type: ClusterIP # Prometheus geralmente é ClusterIP para acesso interno
